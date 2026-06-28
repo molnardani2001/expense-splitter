@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Expense Splitter</title>
+<style>
+body { font-family: system-ui; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+input, button, select { padding: 0.4rem 0.8rem; margin: 0.2rem; }
+button { cursor: pointer; background: #2563eb; color: white; border: none; border-radius: 4px; }
+button:hover { background: #1d4ed8; }
+.remove { background: #dc2626; font-size: 0.8rem; }
+.section { margin: 1.5rem 0; padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
+.expense { margin: 0.5rem 0; padding: 0.5rem; background: white; border-radius: 4px; border: 1px solid #e2e8f0; }
+.expense label { margin-right: 0.5rem; font-size: 0.85rem; }
+.participants { margin-top: 0.3rem; }
+#results { margin-top: 1.5rem; padding: 1rem; background: #f1f5f9; border-radius: 8px; display: none; }
+#results li { margin: 0.3rem 0; }
+.inline { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<h1>Expense Splitter</h1>
+
+<div class="section">
+<h3>People</h3>
+<div id="people"></div>
+<button onclick="addPerson()">+ Add Person</button>
+</div>
+
+<div class="section">
+<h3>Expenses</h3>
+<p style="font-size:0.85rem;color:#64748b;">For each expense, select who paid and check who's included in the split.</p>
+<div id="expenses"></div>
+<button onclick="addExpense()">+ Add Expense</button>
+</div>
+
+<button onclick="calculate()" style="font-size:1.1rem;padding:0.6rem 1.5rem;">Calculate</button>
+
+<div id="results"><h3>Minimal Transactions</h3><ul id="transactions"></ul></div>
+
+<script>
+let personId = 0;
+const people = [];
+
+function addPerson() {
+  const name = prompt('Enter name:');
+  if (!name || !name.trim()) return;
+  people.push({ id: personId, name: name.trim() });
+  renderPeople();
+  updateExpenseSelectors();
+  personId++;
+}
+
+function removePerson(id) {
+  const idx = people.findIndex(p => p.id === id);
+  if (idx > -1) people.splice(idx, 1);
+  renderPeople();
+  updateExpenseSelectors();
+}
+
+function renderPeople() {
+  document.getElementById('people').innerHTML = people.map(p =>
+    `<span style="display:inline-block;background:#e2e8f0;border-radius:4px;padding:0.2rem 0.6rem;margin:0.2rem;">${p.name} <button class="remove" onclick="removePerson(${p.id})">✕</button></span>`
+  ).join('');
+}
+
+function addExpense() {
+  if (people.length < 2) return alert('Add at least 2 people first');
+  const div = document.createElement('div');
+  div.className = 'expense';
+  div.dataset.eid = Date.now();
+  const opts = people.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  const checks = people.map(p => `<label><input type="checkbox" checked value="${p.id}"> ${p.name}</label>`).join('');
+  div.innerHTML = `<div class="inline">
+    <input type="text" placeholder="Description (optional)" style="width:140px;">
+    <select>${opts}</select> paid
+    <input type="number" placeholder="Amount" min="0" step="0.01" style="width:100px;">
+    <button class="remove" onclick="this.closest('.expense').remove()">✕</button>
+  </div>
+  <div class="participants">Split among: ${checks} <label><input type="checkbox" class="toggle-all" onchange="toggleAll(this)"> All</label></div>`;
+  div.querySelector('.toggle-all').checked = true;
+  document.getElementById('expenses').appendChild(div);
+}
+
+function toggleAll(cb) {
+  cb.closest('.participants').querySelectorAll('input[type=checkbox]:not(.toggle-all)').forEach(c => c.checked = cb.checked);
+}
+
+function updateExpenseSelectors() {
+  document.querySelectorAll('.expense').forEach(div => {
+    const sel = div.querySelector('select');
+    const prevVal = sel.value;
+    sel.innerHTML = people.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    if (people.find(p => p.id == prevVal)) sel.value = prevVal;
+
+    const parts = div.querySelector('.participants');
+    const checked = new Set([...parts.querySelectorAll('input[type=checkbox]:not(.toggle-all):checked')].map(c => c.value));
+    const checks = people.map(p => `<label><input type="checkbox" ${checked.has(String(p.id)) || !checked.size ? 'checked' : ''} value="${p.id}"> ${p.name}</label>`).join('');
+    parts.innerHTML = `Split among: ${checks} <label><input type="checkbox" class="toggle-all" onchange="toggleAll(this)"> All</label>`;
+  });
+}
+
+function calculate() {
+  const expenseDivs = document.querySelectorAll('.expense');
+  if (expenseDivs.length === 0) return alert('Add at least one expense');
+  if (people.length < 2) return alert('Add at least 2 people');
+
+  // Build balance map
+  const bal = {};
+  people.forEach(p => bal[p.id] = 0);
+
+  for (const div of expenseDivs) {
+    const payerId = div.querySelector('select').value;
+    const amount = parseFloat(div.querySelector('input[type=number]').value) || 0;
+    if (amount <= 0) continue;
+    const participants = [...div.querySelectorAll('.participants input[type=checkbox]:not(.toggle-all):checked')].map(c => c.value);
+    if (participants.length === 0) continue;
+    const share = amount / participants.length;
+    bal[payerId] += amount;
+    participants.forEach(id => bal[id] -= share);
+  }
+
+  // Round
+  Object.keys(bal).forEach(k => bal[k] = +bal[k].toFixed(2));
+
+  // Greedy minimize transactions
+  const debts = people.map(p => ({ name: p.name, bal: bal[p.id] })).filter(d => Math.abs(d.bal) >= 0.01);
+  debts.sort((a, b) => a.bal - b.bal);
+
+  const transactions = [];
+  let i = 0, j = debts.length - 1;
+  while (i < j) {
+    if (Math.abs(debts[i].bal) < 0.01) { i++; continue; }
+    if (Math.abs(debts[j].bal) < 0.01) { j--; continue; }
+    const amt = Math.min(-debts[i].bal, debts[j].bal);
+    transactions.push(`${debts[i].name} pays ${debts[j].name}: ${amt.toFixed(2)}`);
+    debts[i].bal += amt;
+    debts[j].bal -= amt;
+    if (Math.abs(debts[i].bal) < 0.01) i++;
+    if (Math.abs(debts[j].bal) < 0.01) j--;
+  }
+
+  const ul = document.getElementById('transactions');
+  ul.innerHTML = transactions.length ? transactions.map(t => `<li>${t}</li>`).join('') : '<li>Everyone is settled!</li>';
+  document.getElementById('results').style.display = 'block';
+}
+</script>
+</body>
+</html>
